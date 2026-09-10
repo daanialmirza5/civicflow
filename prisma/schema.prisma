@@ -1,0 +1,384 @@
+// CivicFlow domain model.
+//
+// Provider is SQLite for zero-setup local development. The schema avoids
+// SQLite-only features (no native enums are relied on for cross-db logic,
+// relations are standard) so switching `provider` to "postgresql" and
+// pointing DATABASE_URL at a real Postgres instance is the only change
+// needed to run this in production. See docs/architecture.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & RBAC
+// ---------------------------------------------------------------------------
+
+enum Role {
+  CITIZEN
+  CASE_WORKER
+  SERVICE_ADMIN
+  SYSTEM_ADMIN
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(CITIZEN)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  citizenProfile   CitizenProfile?
+  caseWorkerNotes  CaseNote[]
+  auditEvents      AuditEvent[]
+  aiRecommendations AIRecommendation[] @relation("RecommendationReviewer")
+  notifications    Notification[]
+
+  @@index([role])
+}
+
+// ---------------------------------------------------------------------------
+// Citizen profile (minimized, structured facts used by the eligibility engine)
+// ---------------------------------------------------------------------------
+
+model CitizenProfile {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  age              Int?
+  location         String?
+  residency        String?
+  annualIncome     Int?
+  employmentStatus String?
+  educationLevel   String?
+  householdSize    Int?
+  dependents       Int?
+  businessOwner    Boolean?
+  housingStatus    String?
+  disabilityStatus Boolean?
+  studentStatus    Boolean?
+  agricultureLand  Boolean?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  applications Application[]
+
+  @@index([residency])
+}
+
+// ---------------------------------------------------------------------------
+// Service catalog
+// ---------------------------------------------------------------------------
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String
+  description String
+  jurisdiction String
+  createdAt   DateTime @default(now())
+
+  services Service[]
+}
+
+enum ServiceCategory {
+  EDUCATION
+  HEALTHCARE
+  EMPLOYMENT
+  HOUSING
+  AGRICULTURE
+  SMALL_BUSINESS
+  SOCIAL_SUPPORT
+  DISABILITY_SUPPORT
+  PUBLIC_UTILITIES
+  IDENTITY_DOCUMENTATION
+}
+
+model Service {
+  id             String          @id @default(cuid())
+  name           String
+  description    String
+  category       ServiceCategory
+  jurisdiction   String
+  departmentId   String
+  department     Department      @relation(fields: [departmentId], references: [id])
+  processingDays Int             @default(14)
+  priority       Int             @default(0) // higher = more urgent/high-impact, used in ranking
+  isSynthetic    Boolean         @default(true)
+  lastVerified   DateTime        @default(now())
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+
+  eligibilityRuleSets EligibilityRuleSet[]
+  requirements        Requirement[]
+  applications        Application[]
+  deadlines           Deadline[]
+  benefits            Benefit[]
+
+  @@index([category])
+}
+
+// A rule set is the root "all/any/not" node for a service's eligibility logic.
+// Stored as JSON (RuleNode tree) so it stays fully structured/deterministic.
+model EligibilityRuleSet {
+  id        String   @id @default(cuid())
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  version   Int      @default(1)
+  rules     String   // JSON-encoded RuleNode
+  createdAt DateTime @default(now())
+
+  @@index([serviceId])
+}
+
+enum RequirementType {
+  DOCUMENT
+  FIELD
+}
+
+enum RequirementNecessity {
+  REQUIRED
+  OPTIONAL
+  CONDITIONAL
+}
+
+model Requirement {
+  id          String                @id @default(cuid())
+  serviceId   String
+  service     Service               @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  type        RequirementType
+  necessity   RequirementNecessity  @default(REQUIRED)
+  name        String
+  description String
+  conditionField String?            // for CONDITIONAL: the profile field that triggers this requirement
+  conditionValue String?
+
+  documents ApplicationDocument[]
+
+  @@index([serviceId])
+}
+
+// ---------------------------------------------------------------------------
+// Applications & workflow
+// ---------------------------------------------------------------------------
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  DOCUMENT_VERIFICATION
+  ADDITIONAL_INFORMATION_REQUIRED
+  RESUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model Application {
+  id               String            @id @default(cuid())
+  citizenProfileId String
+  citizenProfile   CitizenProfile    @relation(fields: [citizenProfileId], references: [id], onDelete: Cascade)
+  serviceId        String
+  service          Service           @relation(fields: [serviceId], references: [id])
+  status           ApplicationStatus @default(DRAFT)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  submittedAt      DateTime?
+  decidedAt        DateTime?
+
+  documents  ApplicationDocument[]
+  events     ApplicationEvent[]
+  blockers   ApplicationBlocker[]
+  deadlines  Deadline[]
+  caseNotes  CaseNote[]
+  benefit    Benefit?
+  recommendations AIRecommendation[]
+
+  @@index([status])
+  @@index([citizenProfileId])
+  @@index([serviceId])
+}
+
+enum DocumentStatus {
+  NOT_PROVIDED
+  UPLOADED
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  CORRECTION_REQUIRED
+}
+
+model ApplicationDocument {
+  id            String         @id @default(cuid())
+  applicationId String
+  application   Application    @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  requirementId String
+  requirement   Requirement    @relation(fields: [requirementId], references: [id])
+  status        DocumentStatus @default(NOT_PROVIDED)
+  fileName      String?
+  synthesizedContent String?   // demo-only: text content standing in for a real file
+  verifiedById  String?
+  verificationNote String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([applicationId])
+  @@unique([applicationId, requirementId])
+}
+
+model ApplicationEvent {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  actor         String      // e.g. "CITIZEN", "CASE_WORKER:<id>", "SYSTEM"
+  action        String
+  fromStatus    String?
+  toStatus      String?
+  notes         String?
+  createdAt     DateTime    @default(now())
+
+  @@index([applicationId])
+}
+
+enum BlockerStatus {
+  OPEN
+  RESOLVED
+}
+
+enum BlockerOwner {
+  CITIZEN
+  DEPARTMENT
+  SYSTEM
+}
+
+model ApplicationBlocker {
+  id             String        @id @default(cuid())
+  applicationId  String
+  application    Application   @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  reasonCode     String        // e.g. DOCUMENT_MISSING, DOCUMENT_REJECTED, REVIEW_PENDING
+  reason         String
+  requiredAction String
+  owner          BlockerOwner
+  status         BlockerStatus @default(OPEN)
+  createdAt      DateTime      @default(now())
+  resolvedAt     DateTime?
+
+  @@index([applicationId, status])
+}
+
+enum DeadlineKind {
+  APPLICATION
+  DOCUMENT
+  RESPONSE
+  REVIEW
+}
+
+model Deadline {
+  id            String        @id @default(cuid())
+  kind          DeadlineKind
+  dueAt         DateTime
+  label         String
+  serviceId     String?
+  service       Service?      @relation(fields: [serviceId], references: [id])
+  applicationId String?
+  application   Application?  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  completedAt   DateTime?
+  createdAt     DateTime      @default(now())
+
+  @@index([dueAt])
+  @@index([applicationId])
+}
+
+model Benefit {
+  id            String      @id @default(cuid())
+  applicationId String      @unique
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  serviceId     String
+  service       Service     @relation(fields: [serviceId], references: [id])
+  description   String
+  grantedAt     DateTime    @default(now())
+}
+
+model CaseNote {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  authorId      String
+  author        User        @relation(fields: [authorId], references: [id])
+  note          String
+  createdAt     DateTime    @default(now())
+
+  @@index([applicationId])
+}
+
+// ---------------------------------------------------------------------------
+// AI layer: recommendations must be human-approved before taking effect,
+// and always carry the structured evidence they were grounded on.
+// ---------------------------------------------------------------------------
+
+enum RecommendationStatus {
+  SUGGESTED
+  APPROVED
+  EDITED
+  REJECTED
+  EXECUTED
+}
+
+model AIRecommendation {
+  id             String                @id @default(cuid())
+  applicationId  String?
+  application    Application?          @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  agent          String                // e.g. "DOCUMENT_AGENT", "ELIGIBILITY_EXPLANATION_AGENT"
+  question       String?
+  answer         String
+  evidence       String                // JSON-encoded EvidenceItem[]
+  provider       String                // "anthropic" | "openai" | "google" | "mock"
+  status         RecommendationStatus  @default(SUGGESTED)
+  reviewerId     String?
+  reviewer       User?                 @relation("RecommendationReviewer", fields: [reviewerId], references: [id])
+  createdAt      DateTime              @default(now())
+  reviewedAt     DateTime?
+
+  @@index([applicationId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail (append-only at the application layer — no update/delete API)
+// ---------------------------------------------------------------------------
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  actorLabel String   // denormalized, survives actor deletion
+  action     String
+  entityType String
+  entityId   String
+  previous   String?
+  next       String?
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
