@@ -10,7 +10,12 @@ test("citizen uploads a missing document, case worker verifies it, blocker clear
   await login(page, "citizen@civicflow.dev");
 
   await page.goto("/applications");
-  const blockedCard = page.locator("a", { hasText: "Blocked" }).first();
+  // The demo citizen has more than one blocked application and the list is
+  // ordered by updatedAt, so select the flagship one by name.
+  const blockedCard = page
+    .locator("a", { hasText: "Student Education Support" })
+    .filter({ hasText: "Blocked" })
+    .first();
   await expect(blockedCard).toBeVisible({ timeout: 15000 });
   await blockedCard.click();
   await expect(page.getByText("Why is this stuck?")).toBeVisible({ timeout: 15000 });

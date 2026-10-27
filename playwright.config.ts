@@ -12,7 +12,9 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
   webServer: {
-    command: "npm run dev",
+    // CI runs `npm run build` first, so serve that build instead of starting
+    // the dev server on top of the production .next output.
+    command: process.env.CI ? "npm run start" : "npm run dev",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,

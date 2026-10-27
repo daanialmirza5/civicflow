@@ -1,7 +1,6 @@
 # CivicFlow — Technical Debt & Architectural Audit
 
 **Repository**: `civicflow`  
-**Status**: Tier 2 Supporting (Vitest + Playwright suites)
 
 ## Prioritized Debt Items
 - **[P1 — High] Government Single Sign-On (OIDC / Login.gov) Integration**: Add standardized OpenID Connect identity provider connectors.
