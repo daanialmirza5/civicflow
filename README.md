@@ -89,6 +89,18 @@ Document verification, application decisions, and AI-answer review are all expli
 (`AIRecommendation.status`: `SUGGESTED` -> `APPROVED` / `EDITED` / `REJECTED`). See
 [`docs/security.md`](docs/security.md).
 
+## Screenshots
+
+Captured from the running app with the seeded synthetic data. Every person, service and department is fictional.
+
+| Eligibility check with the rule that failed | Case worker queue with blocker reasons |
+| :---: | :---: |
+| ![Service eligibility](docs/screenshots/03-service-eligibility.png) | ![Case worker queue](docs/screenshots/06-case-worker-queue.png) |
+| **Citizen dashboard** | **Application detail** |
+| ![Citizen dashboard](docs/screenshots/01-citizen-dashboard.png) | ![Application detail](docs/screenshots/05-application-detail.png) |
+| **Service discovery** | **Analytics** |
+| ![Services](docs/screenshots/02-services.png) | ![Analytics](docs/screenshots/07-analytics.png) |
+
 ## Tech stack
 
 | Layer | Choice |
